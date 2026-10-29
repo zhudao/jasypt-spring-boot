@@ -3,11 +3,13 @@ on:
   release:
     types: [created]
   workflow_dispatch: {}
+
 jobs:
+
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       #        with:
       #          token: ${{ secrets.ACTIONS_PAT }}
       - name: Setup Git Client
@@ -18,25 +20,12 @@ jobs:
         uses: webfactory/ssh-agent@v0.7.0
         with:
           ssh-private-key: ${{ secrets.SSH_KEY }}
-      - name: Cache local Maven repository
-        uses: actions/cache@v2
+      - name: Set up Java and Maven settings
+        uses: actions/setup-java@v4
         with:
-          path: ~/.m2/repository
-          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
-          restore-keys: |
-            ${{ runner.os }}-maven-
-      - name: Install gpg secret key
-        id: import_gpg
-        uses: crazy-max/ghaction-import-gpg@v3
-        with:
-          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
-          passphrase: ${{ secrets.OSSRH_GPG_SECRET_KEY_PASSWORD }}
-      - name: Set up Maven Credentials
-        uses: actions/setup-java@v2
-        with:
-          java-version: '11'
-          distribution: 'adopt'
-          cache: maven
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'maven'
           server-id: ossrh
           server-username: MAVEN_USERNAME
           server-password: MAVEN_PASSWORD
@@ -46,7 +35,27 @@ jobs:
         run: mvn --no-transfer-progress --batch-mode release:prepare release:perform
 #        run: mvn --no-transfer-progress --batch-mode release:prepare release:perform -Darguments="-Dgpg.passphrase=${{ secrets.OSSRH_GPG_SECRET_KEY_PASSWORD }} -Dgpg.keyname=${{ steps.import_gpg.outputs.keyid }}"
         env:
-          #          GITHUB_TOKEN: ${{ secrets.ACTIONS_PAT }}
-          MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
-          MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
+          MAVEN_USERNAME: ${{ secrets.SONATYPE_USERNANE }}
+          MAVEN_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
           MAVEN_GPG_PASSPHRASE: ${{ secrets.OSSRH_GPG_SECRET_KEY_PASSWORD }}
+      - name: Extract version and find previous tag
+        id: version
+        run: |
+          # Get current version from released tag
+          CURRENT_TAG=$(git describe --tags --abbrev=0)
+          VERSION=${CURRENT_TAG#jasypt-spring-boot-parent-}
+          
+          # Find previous tag
+          PREVIOUS_TAG=$(git tag --sort=-version:refname | grep "^jasypt-spring-boot-parent-" | grep -v "${CURRENT_TAG}" | head -1)
+          
+          echo "current_tag=${CURRENT_TAG}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "previous_tag=${PREVIOUS_TAG:-}" >> $GITHUB_OUTPUT
+      - name: Create GitHub Release
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.current_tag }}" \
+            --title "v${{ steps.version.outputs.version }}" \
+            --generate-notes
